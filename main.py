@@ -1,5 +1,5 @@
-
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 import requests
@@ -8,11 +8,12 @@ from datetime import datetime
 import os
 import pymongo
 from dotenv import load_dotenv
-from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 app = FastAPI()
+
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,56 +21,63 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-client = pymongo.MongoClient(os.getenv("MONGO_URI"))
+
+# MongoDB connection
+MONGO_URI = os.getenv("MONGO_URI")
+if not MONGO_URI:
+    raise RuntimeError("❌ MONGO_URI not found in environment variables!")
+
+client = pymongo.MongoClient(MONGO_URI)
 db = client["amazon_tracker"]
 collection = db["asin_data"]
 
+# Request schema
 class ASINRequest(BaseModel):
     asins: List[str]
 
 @app.post("/track_asin")
 def track_asins(request: ASINRequest):
+    print("➡️ Received ASINs:", request.asins)
     results = []
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+
     for asin in request.asins:
-        url = f"https://www.amazon.in/dp/{asin}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36"
-        }
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            continue
-
-        soup = BeautifulSoup(response.content, "html.parser")
-
         try:
-            title = soup.find(id="productTitle").get_text().strip()
-            price_tag = soup.select_one(".a-price .a-offscreen")
-            price = price_tag.get_text().strip() if price_tag else "N/A"
-            rating_tag = soup.select_one("span.a-icon-alt")
-            rating = rating_tag.get_text().strip() if rating_tag else "N/A"
-            review_count_tag = soup.select_one("#acrCustomerReviewText")
-            reviews = review_count_tag.get_text().strip() if review_count_tag else "N/A"
+            url = f"https://www.amazon.in/dp/{asin}"
+            print("🔍 Fetching:", url)
+            response = requests.get(url, headers=headers)
+
+            if response.status_code != 200:
+                raise Exception(f"Amazon returned status code {response.status_code}")
+
+            soup = BeautifulSoup(response.content, "html.parser")
+
+            title = soup.find(id="productTitle")
+            price = soup.find("span", class_="a-price-whole")
+            rating = soup.find("span", class_="a-icon-alt")
+            reviews = soup.find(id="acrCustomerReviewText")
+
+            if not title:
+                raise Exception("🔴 Product title not found (maybe blocked or bad ASIN)")
 
             data = {
                 "asin": asin,
-                "title": title,
-                "price": price,
-                "rating": rating,
-                "reviews": reviews,
-                "timestamp": datetime.utcnow()
+                "title": title.get_text(strip=True) if title else "N/A",
+                "price": price.get_text(strip=True) if price else "N/A",
+                "rating": rating.get_text(strip=True) if rating else "N/A",
+                "reviews": reviews.get_text(strip=True) if reviews else "N/A",
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
 
             collection.insert_one(data)
             results.append(data)
+            print("✅ Scraped:", data["title"])
 
         except Exception as e:
+            print(f"❌ Error processing {asin}:", e)
             raise HTTPException(status_code=500, detail=str(e))
 
-    return {"status": "success", "tracked": results}
-
-@app.get("/get_data/{asin}")
-def get_asin_data(asin: str):
-    data = list(collection.find({"asin": asin}, {"_id": 0}))
-    if not data:
-        raise HTTPException(status_code=404, detail="No data found for this ASIN")
-    return data
+    return results
