@@ -12,6 +12,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 
 client = pymongo.MongoClient(os.getenv("MONGO_URI"))
 db = client["amazon_tracker"]
