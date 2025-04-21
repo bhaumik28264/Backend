@@ -18,7 +18,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-
+)
 client = pymongo.MongoClient(os.getenv("MONGO_URI"))
 db = client["amazon_tracker"]
 collection = db["asin_data"]
